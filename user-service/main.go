@@ -28,7 +28,7 @@ func main() {
 	protected.Use(middleware.AuthMiddleware())
 	{
 		protected.GET("/me", handlers.GetProfile)
-		protected.PUT("/me", handlers.UpdateProfile)
+		protected.PATCH("/me", handlers.UpdateProfile)
 	}
 
 	port := os.Getenv("PORT")
