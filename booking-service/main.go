@@ -5,6 +5,7 @@ import (
 	"booking-service/handlers"
 	"booking-service/middleware"
 	"booking-service/models"
+	"booking-service/messaging"
 	"log"
 	"os"
 	"time"
@@ -54,12 +55,19 @@ func main() {
 	database.DB.AutoMigrate(&models.Flight{}, &models.Hotel{}, &models.Booking{})
 	seed()
 	startExpiryJob()
+	messaging.StartPaymentResultConsumer()
 
 	r := gin.Default()
 
 	r.GET("/health", func(c *gin.Context) { c.JSON(200, gin.H{"status": "ok"}) })
 	r.GET("/flights", handlers.SearchFlights)
 	r.GET("/hotels", handlers.SearchHotels)
+
+	internal := r.Group("/internal")
+	internal.Use(middleware.InternalOnly())
+	{
+		internal.GET("/bookings/:id", handlers.InternalGetBooking)
+	}
 
 	protected := r.Group("/bookings")
 	protected.Use(middleware.AuthMiddleware())

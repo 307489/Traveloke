@@ -1,62 +1,75 @@
 # Traveloka Clone
 
-A microservices-based Traveloka clone built with Go. The project is organized into separate services for users, administrators, bookings, and payments.
+A Go-based microservices project for searching flights and hotels, managing user accounts, creating bookings, and processing payments.
 
 ## Services
 
-| Service | Purpose | Current status |
-|---|---|---|
-| `user-service` | User registration, login, JWT authentication, and profile management | Implemented |
-| `admin-service` | Administrative operations | Module initialized; implementation pending |
-| `booking-service` | Booking management | Module initialized; implementation pending |
-| `payment-service` | Payment processing | Module initialized; implementation pending |
+| Service | Default port | Responsibility | Status |
+|---|---:|---|---|
+| `user-service` | `8081` | Registration, login, JWT authentication, and user profiles | Implemented |
+| `booking-service` | `8082` | Flight and hotel search, inventory, and bookings | Implemented |
+| `payment-service` | `8083` | Payment creation and asynchronous payment processing | Implemented |
+| `admin-service` | - | Reserved for administrative features | Not implemented |
+
+Each service is an independent Go module.
 
 ## Architecture
 
-Each service is an independent Go module:
-
 ```text
-traveloka-clone/
-├── admin-service/
-├── booking-service/
-├── payment-service/
-└── user-service/
+Client
+  ├── user-service       :8081
+  ├── booking-service    :8082
+  └── payment-service    :8083
+
+booking-service  <── HTTP/internal API ──  payment-service
+booking-service  <── RabbitMQ payment result events
+payment-service  ── RabbitMQ payment requests/results
 ```
 
-The current user service uses:
-
-- Go
-- Gin for HTTP routing
-- PostgreSQL for persistence
-- GORM for database access
-- JWT for authentication
-- bcrypt for password hashing
+The services use PostgreSQL and RabbitMQ. User, booking, and payment services share the same JWT secret so that authenticated requests can be verified consistently. Internal booking requests are protected with `INTERNAL_API_KEY`.
 
 ## Requirements
 
 - Go 1.27.1 or later
 - PostgreSQL
+- RabbitMQ
 
-## Getting Started
+Create these PostgreSQL databases before starting the services:
 
-### 1. Clone the repository
+- `traveloka_users`
+- `traveloka_bookings`
+- `traveloka_payments`
 
-```powershell
-git clone <repository-url>
-cd traveloka-clone
+Tables are created automatically with GORM migrations when each service starts. The booking service also seeds sample flights and hotels when its database is empty.
+
+## Configuration
+
+Each service has its own environment file:
+
+```text
+user-service/.env.example
+booking-service/.env.example
+payment-service/.env.example
+admin-service/.env.example
 ```
 
-### 2. Prepare the user service
-
-Create a PostgreSQL database named `traveloka_users`, then create the user service environment file:
+Create the local files from the templates:
 
 ```powershell
 Copy-Item .\user-service\.env.example .\user-service\.env
+Copy-Item .\booking-service\.env.example .\booking-service\.env
+Copy-Item .\payment-service\.env.example .\payment-service\.env
 ```
 
-Update the database credentials and `JWT_SECRET` in `user-service\.env`.
+`admin-service/.env.example` is currently empty because the admin service has no implementation or runtime configuration yet.
 
-### 3. Start the user service
+Use the same values for `JWT_SECRET` and `INTERNAL_API_KEY` in the user, booking, and payment service configuration files. Update database credentials and the RabbitMQ URL for the local environment.
+
+## Running the Services
+
+Open a separate terminal for each service.
+
+### User service
 
 ```powershell
 Set-Location .\user-service
@@ -64,16 +77,46 @@ go mod download
 go run .
 ```
 
-The user service runs at `http://localhost:8081` by default.
+Runs on `http://localhost:8081`.
 
-## User Service API
+### Booking service
 
-### Register
+```powershell
+Set-Location .\booking-service
+go mod download
+go run .
+```
+
+Runs on `http://localhost:8082`.
+
+### Payment service
+
+```powershell
+Set-Location .\payment-service
+go mod download
+go run .
+```
+
+Runs on `http://localhost:8083`.
+
+## API Overview
+
+All protected endpoints require:
 
 ```http
-POST /auth/register
-Content-Type: application/json
+Authorization: Bearer <jwt-token>
 ```
+
+### User service
+
+| Method | Endpoint | Authentication |
+|---|---|---|
+| `POST` | `/auth/register` | Public |
+| `POST` | `/auth/login` | Public |
+| `GET` | `/users/me` | JWT required |
+| `PUT` | `/users/me` | JWT required |
+
+Register:
 
 ```json
 {
@@ -85,12 +128,7 @@ Content-Type: application/json
 }
 ```
 
-### Login
-
-```http
-POST /auth/login
-Content-Type: application/json
-```
+Login:
 
 ```json
 {
@@ -99,67 +137,75 @@ Content-Type: application/json
 }
 ```
 
-The response contains a JWT token:
+The login response contains a JWT token for the protected endpoints.
+
+### Booking service
+
+| Method | Endpoint | Authentication |
+|---|---|---|
+| `GET` | `/health` | Public |
+| `GET` | `/flights` | Public |
+| `GET` | `/hotels` | Public |
+| `POST` | `/bookings` | JWT required |
+| `GET` | `/bookings/me` | JWT required |
+| `GET` | `/bookings/:id` | JWT required |
+| `POST` | `/bookings/:id/cancel` | JWT required |
+| `GET` | `/internal/bookings/:id` | Internal API key |
+
+Flight search supports `from`, `to`, `date`, `min_price`, `max_price`, `passengers`, `page`, `limit`, and `sort` query parameters. Hotel search supports `city`, `min_stars`, `min_price`, `max_price`, `rooms`, `page`, `limit`, and `sort`.
+
+Create a booking:
 
 ```json
 {
-  "token": "your-jwt-token"
+  "type": "flight",
+  "item_id": "<flight-id>",
+  "quantity": 1
 }
 ```
 
-### Get the current user's profile
+Supported booking types are `flight` and `hotel`. A booking is held for 10 minutes while payment is completed.
 
-```http
-GET /users/me
-Authorization: Bearer your-jwt-token
-```
+### Payment service
 
-### Update the current user's profile
+| Method | Endpoint | Authentication |
+|---|---|---|
+| `GET` | `/health` | Public |
+| `POST` | `/payments` | JWT required |
+| `GET` | `/payments/me` | JWT required |
 
-```http
-PUT /users/me
-Authorization: Bearer your-jwt-token
-Content-Type: application/json
-```
+Create a payment for a held booking:
 
 ```json
 {
-  "full_name": "John Smith",
-  "phone": "+62987654321"
+  "booking_id": "<booking-id>"
 }
 ```
 
-## Environment Variables
+Payment requests are published to RabbitMQ and processed asynchronously. The payment service validates the booking through the booking service's internal endpoint before creating a payment.
 
-The user service uses `user-service/.env.example` as its configuration template:
+## Example Workflow
 
-```env
-DB_HOST=localhost
-DB_PORT=5432
-DB_USER=postgres
-DB_PASSWORD=your-database-password
-DB_NAME=traveloka_users
-JWT_SECRET=your-jwt-secret
-PORT=8081
-RABBITMQ_URL=amqp://guest:guest@localhost:5672/
-```
-
-`RABBITMQ_URL` is reserved for future messaging integration and is not currently used by the user service.
+1. Register a user through `user-service`.
+2. Log in and save the returned JWT.
+3. Search flights or hotels through `booking-service`.
+4. Create a booking using the selected item ID.
+5. Create a payment using the booking ID.
+6. Check the payment and booking status through their respective endpoints.
 
 ## Development
 
-Run commands from the directory of the service being changed:
+Run tests for an individual service from that service's directory:
 
 ```powershell
-go mod download
-go run .
 go test ./...
 ```
 
-The database schema for the user service is created automatically with GORM migrations when the service starts.
+The repository does not currently have a root Go module, so commands must be run inside the relevant service directory.
 
 ## Security
 
 - Do not commit `.env` files or real credentials.
-- Use a strong, unique `JWT_SECRET`.
-- Use secure secret management and HTTPS in production.
+- Use strong, unique values for `JWT_SECRET` and `INTERNAL_API_KEY`.
+- Keep the booking service's internal endpoint accessible only to trusted services.
+- Use HTTPS and a secure secret-management solution in production.
