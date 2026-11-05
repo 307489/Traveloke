@@ -10,5 +10,6 @@ type User struct {
 	FullName  string    `json:"full_name"`
 	Phone     string    `json:"phone"`
 	CreatedAt time.Time `json:"created_at"`
+	IsAdmin   bool      `gorm:"default:false" json:"is_admin"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

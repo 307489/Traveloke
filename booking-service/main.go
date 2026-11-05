@@ -67,6 +67,16 @@ func main() {
 	internal.Use(middleware.InternalOnly())
 	{
 		internal.GET("/bookings/:id", handlers.InternalGetBooking)
+
+		internal.POST("/flights", handlers.InternalCreateFlight)
+		internal.PATCH("/flights/:id", handlers.InternalUpdateFlight)
+		internal.DELETE("/flights/:id", handlers.InternalDeleteFlight)
+
+		internal.POST("/hotels", handlers.InternalCreateHotel)
+		internal.PATCH("/hotels/:id", handlers.InternalUpdateHotel)
+		internal.DELETE("/hotels/:id", handlers.InternalDeleteHotel)
+
+		internal.GET("/analytics", handlers.InternalAnalytics)
 	}
 
 	protected := r.Group("/bookings")
@@ -77,6 +87,7 @@ func main() {
 		protected.GET("/:id", handlers.GetBooking)
 		protected.POST("/:id/cancel", handlers.CancelBooking)
 	}
+	
 
 	port := os.Getenv("PORT")
 	if port == "" {
