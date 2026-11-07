@@ -9,7 +9,7 @@ A Go-based microservices project for searching flights and hotels, managing user
 | `user-service` | `8081` | Registration, login, JWT authentication, and user profiles | Implemented |
 | `booking-service` | `8082` | Flight and hotel search, inventory, and bookings | Implemented |
 | `payment-service` | `8083` | Payment creation and asynchronous payment processing | Implemented |
-| `admin-service` | - | Reserved for administrative features | Not implemented |
+| `admin-service` | `8084` | Administrative flight, hotel, and analytics operations | Implemented |
 
 Each service is an independent Go module.
 
@@ -19,11 +19,12 @@ Each service is an independent Go module.
 Client
   ├── user-service       :8081
   ├── booking-service    :8082
-  └── payment-service    :8083
+  ├── payment-service    :8083
+  └── admin-service      :8084
 
 booking-service  <── HTTP/internal API ──  payment-service
 booking-service  <── RabbitMQ payment result events
-payment-service  ── RabbitMQ payment requests/results
+payment-service  <── RabbitMQ payment requests/results
 ```
 
 The services use PostgreSQL and RabbitMQ. User, booking, and payment services share the same JWT secret so that authenticated requests can be verified consistently. Internal booking requests are protected with `INTERNAL_API_KEY`.
@@ -33,6 +34,7 @@ The services use PostgreSQL and RabbitMQ. User, booking, and payment services sh
 - Go 1.27.1 or later
 - PostgreSQL
 - RabbitMQ
+- Docker Desktop with Docker Compose (optional, for containerized setup)
 
 Create these PostgreSQL databases before starting the services:
 
@@ -43,6 +45,22 @@ Create these PostgreSQL databases before starting the services:
 Tables are created automatically with GORM migrations when each service starts. The booking service also seeds sample flights and hotels when its database is empty.
 
 ## Configuration
+
+### Docker Compose configuration
+
+The root `.env.example` contains the variables used by Docker Compose:
+
+```text
+.env.example
+```
+
+Create the root `.env` file before starting the containers:
+
+```powershell
+Copy-Item .\.env.example .\.env
+```
+
+Update the placeholder values in `.env`, especially `POSTGRES_PASSWORD`, `JWT_SECRET`, and `INTERNAL_API_KEY`.
 
 Each service has its own environment file:
 
@@ -59,13 +77,31 @@ Create the local files from the templates:
 Copy-Item .\user-service\.env.example .\user-service\.env
 Copy-Item .\booking-service\.env.example .\booking-service\.env
 Copy-Item .\payment-service\.env.example .\payment-service\.env
+Copy-Item .\admin-service\.env.example .\admin-service\.env
 ```
 
-`admin-service/.env.example` is currently empty because the admin service has no implementation or runtime configuration yet.
+The admin service requires `JWT_SECRET`, `INTERNAL_API_KEY`, and `BOOKING_SERVICE_URL`. Its admin endpoints require a valid JWT with the `is_admin` claim.
 
 Use the same values for `JWT_SECRET` and `INTERNAL_API_KEY` in the user, booking, and payment service configuration files. Update database credentials and the RabbitMQ URL for the local environment.
 
 ## Running the Services
+
+### Docker Compose
+
+From the repository root, after creating `.env` from `.env.example`:
+
+```powershell
+docker compose up --build -d
+docker compose ps
+```
+
+The services are available on ports `8081` through `8084`. PostgreSQL and RabbitMQ are also started automatically. To stop the containers:
+
+```powershell
+docker compose down
+```
+
+### Running locally with Go
 
 Open a separate terminal for each service.
 
@@ -98,6 +134,16 @@ go run .
 ```
 
 Runs on `http://localhost:8083`.
+
+### Admin service
+
+```powershell
+Set-Location .\admin-service
+go mod download
+go run .
+```
+
+Runs on `http://localhost:8084`.
 
 ## API Overview
 
@@ -184,6 +230,54 @@ Create a payment for a held booking:
 
 Payment requests are published to RabbitMQ and processed asynchronously. The payment service validates the booking through the booking service's internal endpoint before creating a payment.
 
+### Admin service
+
+| Method | Endpoint | Authentication |
+|---|---|---|
+| `GET` | `/health` | Public |
+| `POST` | `/admin/flights` | Admin JWT required |
+| `PATCH` | `/admin/flights/:id` | Admin JWT required |
+| `DELETE` | `/admin/flights/:id` | Admin JWT required |
+| `POST` | `/admin/hotels` | Admin JWT required |
+| `PATCH` | `/admin/hotels/:id` | Admin JWT required |
+| `DELETE` | `/admin/hotels/:id` | Admin JWT required |
+| `GET` | `/admin/analytics` | Admin JWT required |
+
+All admin endpoints require a valid JWT signed with `JWT_SECRET` and an `is_admin: true` claim. The admin service forwards authorized requests to the booking service's internal API using `INTERNAL_API_KEY`.
+
+Create a flight:
+
+```json
+{
+  "airline": "Example Air",
+  "flight_number": "EA123",
+  "origin": "CGK",
+  "destination": "DPS",
+  "departure_time": "2026-12-01T08:00:00Z",
+  "arrival_time": "2026-12-01T10:00:00Z",
+  "price": 1250000,
+  "total_seats": 180
+}
+```
+
+Update a flight with any subset of the same fields. `arrival_time` must be later than `departure_time`, and `total_seats` cannot be reduced below the number of seats already booked.
+
+Create a hotel:
+
+```json
+{
+  "name": "Example Hotel",
+  "city": "Bali",
+  "stars": 4,
+  "price_per_night": 850000,
+  "total_rooms": 60
+}
+```
+
+Update a hotel with any subset of these fields. `stars` must be between 1 and 5, and `total_rooms` cannot be reduced below the number of rooms already booked.
+
+Flight or hotel deletion returns a conflict when the item still has active `held` or `paid` bookings. The analytics endpoint returns total bookings, bookings created today, booking counts by status, total paid revenue, and the five most-booked flight routes.
+
 ## Example Workflow
 
 1. Register a user through `user-service`.
@@ -192,6 +286,7 @@ Payment requests are published to RabbitMQ and processed asynchronously. The pay
 4. Create a booking using the selected item ID.
 5. Create a payment using the booking ID.
 6. Check the payment and booking status through their respective endpoints.
+7. Use an admin JWT to manage flight and hotel inventory or view booking analytics.
 
 ## Development
 
