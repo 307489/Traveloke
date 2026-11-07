@@ -1,0 +1,103 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  user-service:
+    build: ./user-service
+    ports:
+      - "8081:8081"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: traveloka_users
+      JWT_SECRET: ${JWT_SECRET}
+      PORT: 8081
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: on-failure
+
+  booking-service:
+    build: ./booking-service
+    ports:
+      - "8082:8082"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: traveloka_bookings
+      JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      PORT: 8082
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: on-failure
+
+  payment-service:
+    build: ./payment-service
+    ports:
+      - "8083:8083"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: traveloka_payments
+      JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      BOOKING_SERVICE_URL: http://booking-service:8082
+      PORT: 8083
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      booking-service:
+        condition: service_started
+    restart: on-failure
+
+  admin-service:
+    build: ./admin-service
+    ports:
+      - "8084:8084"
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      BOOKING_SERVICE_URL: http://booking-service:8082
+      PORT: 8084
+    depends_on:
+      - booking-service
+    restart: on-failure
+
+volumes:
+  pgdata:
