@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"booking-service/cache"
 	"booking-service/database"
 	"booking-service/models"
 	"net/http"
@@ -24,6 +25,16 @@ func paginate(c *gin.Context) (page, limit int) {
 
 func SearchFlights(c *gin.Context) {
 	page, limit := paginate(c)
+
+	cacheKey := "flights:" + c.Request.URL.RawQuery
+	var cached gin.H
+	if cache.Get(cacheKey, &cached) {
+		c.Header("X-Cache", "HIT")
+		c.JSON(http.StatusOK, cached)
+		return
+	}
+	c.Header("X-Cache", "MISS")
+
 	q := database.DB.Model(&models.Flight{})
 
 	if from := c.Query("from"); from != "" {
@@ -70,11 +81,23 @@ func SearchFlights(c *gin.Context) {
 	var flights []models.Flight
 	q.Offset((page - 1) * limit).Limit(limit).Find(&flights)
 
-	c.JSON(http.StatusOK, gin.H{"page": page, "limit": limit, "total": total, "flights": flights})
+	result := gin.H{"page": page, "limit": limit, "total": total, "flights": flights}
+	cache.Set(cacheKey, result, 45*time.Second)
+	c.JSON(http.StatusOK, result)
 }
 
 func SearchHotels(c *gin.Context) {
 	page, limit := paginate(c)
+
+	cacheKey := "hotels:" + c.Request.URL.RawQuery
+	var cached gin.H
+	if cache.Get(cacheKey, &cached) {
+		c.Header("X-Cache", "HIT")
+		c.JSON(http.StatusOK, cached)
+		return
+	}
+	c.Header("X-Cache", "MISS")
+
 	q := database.DB.Model(&models.Hotel{})
 
 	if city := c.Query("city"); city != "" {
@@ -115,5 +138,7 @@ func SearchHotels(c *gin.Context) {
 	var hotels []models.Hotel
 	q.Offset((page - 1) * limit).Limit(limit).Find(&hotels)
 
-	c.JSON(http.StatusOK, gin.H{"page": page, "limit": limit, "total": total, "hotels": hotels})
+	result := gin.H{"page": page, "limit": limit, "total": total, "hotels": hotels}
+	cache.Set(cacheKey, result, 45*time.Second)
+	c.JSON(http.StatusOK, result)
 }

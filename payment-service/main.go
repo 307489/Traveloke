@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -20,7 +21,9 @@ func main() {
 	messaging.StartConsumer()
 
 	r := gin.Default()
+	r.Use(middleware.Metrics())
 	r.GET("/health", func(c *gin.Context) { c.JSON(200, gin.H{"status": "ok"}) })
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	payments := r.Group("/payments")
 	payments.Use(middleware.AuthMiddleware())

@@ -1,15 +1,15 @@
-# Traveloka Clone
+# Traveloke
 
 A Go-based microservices project for searching flights and hotels, managing user accounts, creating bookings, and processing payments.
 
 ## Services
 
-| Service | Default port | Responsibility | Status |
-|---|---:|---|---|
-| `user-service` | `8081` | Registration, login, JWT authentication, and user profiles | Implemented |
-| `booking-service` | `8082` | Flight and hotel search, inventory, and bookings | Implemented |
-| `payment-service` | `8083` | Payment creation and asynchronous payment processing | Implemented |
-| `admin-service` | `8084` | Administrative flight, hotel, and analytics operations | Implemented |
+| Service | Default port | Responsibility |
+|---|---:|---|
+| `user-service` | `8081` | Registration, login, JWT authentication, and user profiles |
+| `booking-service` | `8082` | Flight and hotel search, inventory, and bookings |
+| `payment-service` | `8083` | Payment creation and asynchronous payment processing |
+| `admin-service` | `8084` | Administrative flight, hotel, and analytics operations |
 
 Each service is an independent Go module.
 
@@ -27,22 +27,25 @@ booking-service  <── RabbitMQ payment result events
 payment-service  <── RabbitMQ payment requests/results
 ```
 
-The services use PostgreSQL and RabbitMQ. User, booking, and payment services share the same JWT secret so that authenticated requests can be verified consistently. Internal booking requests are protected with `INTERNAL_API_KEY`.
+The services use PostgreSQL, RabbitMQ, and Redis. User, booking, and payment services share the same JWT secret so that authenticated requests can be verified consistently. Internal service requests are protected with `INTERNAL_API_KEY`.
 
 ## Requirements
 
 - Go 1.27.1 or later
 - PostgreSQL
 - RabbitMQ
+- Redis
 - Docker Desktop with Docker Compose (optional, for containerized setup)
 
-Create these PostgreSQL databases before starting the services:
+When running locally, create these PostgreSQL databases before starting the services:
 
 - `traveloka_users`
 - `traveloka_bookings`
 - `traveloka_payments`
 
 Tables are created automatically with GORM migrations when each service starts. The booking service also seeds sample flights and hotels when its database is empty.
+
+When using Docker Compose, `init-db.sql` creates the three databases automatically on the first PostgreSQL initialization.
 
 ## Configuration
 
@@ -60,7 +63,7 @@ Create the root `.env` file before starting the containers:
 Copy-Item .\.env.example .\.env
 ```
 
-Update the placeholder values in `.env`, especially `POSTGRES_PASSWORD`, `JWT_SECRET`, and `INTERNAL_API_KEY`.
+Update the placeholder values in `.env`, especially `POSTGRES_PASSWORD`, `JWT_SECRET`, and `INTERNAL_API_KEY`. The root `.env` is ignored by Git and must not contain credentials that are committed to the repository.
 
 Each service has its own environment file:
 
@@ -82,7 +85,7 @@ Copy-Item .\admin-service\.env.example .\admin-service\.env
 
 The admin service requires `JWT_SECRET`, `INTERNAL_API_KEY`, and `BOOKING_SERVICE_URL`. Its admin endpoints require a valid JWT with the `is_admin` claim.
 
-Use the same values for `JWT_SECRET` and `INTERNAL_API_KEY` in the user, booking, and payment service configuration files. Update database credentials and the RabbitMQ URL for the local environment.
+Use the same values for `JWT_SECRET` and `INTERNAL_API_KEY` in the user, booking, payment, and admin service configuration files. For local execution, use `localhost` service addresses. Inside Docker Compose, services use container names such as `postgres`, `rabbitmq`, and `redis`.
 
 ## Running the Services
 
@@ -95,7 +98,9 @@ docker compose up --build -d
 docker compose ps
 ```
 
-The services are available on ports `8081` through `8084`. PostgreSQL and RabbitMQ are also started automatically. To stop the containers:
+The services are available on ports `8081` through `8084`. PostgreSQL, RabbitMQ, and Redis are also started automatically. RabbitMQ management UI is available at `http://localhost:15672`, and Redis is available at `localhost:6379` from the host.
+
+To stop the containers:
 
 ```powershell
 docker compose down
@@ -153,6 +158,30 @@ All protected endpoints require:
 Authorization: Bearer <jwt-token>
 ```
 
+Every service exposes a public Prometheus metrics endpoint:
+
+| Service | Metrics endpoint |
+|---|---|
+| User service | `GET http://localhost:8081/metrics` |
+| Booking service | `GET http://localhost:8082/metrics` |
+| Payment service | `GET http://localhost:8083/metrics` |
+| Admin service | `GET http://localhost:8084/metrics` |
+
+The metrics include Go runtime metrics and HTTP request counters and duration histograms, including `http_requests_total` and `http_request_duration_seconds`.
+
+To test metrics, send a `GET` request to any service's `/metrics` endpoint using Postman or a browser. The response uses Prometheus text format:
+
+```text
+http_requests_total{method="GET",path="/health",status="200"} 1
+http_request_duration_seconds_count{method="GET",path="/health"} 1
+```
+
+When running the services with Docker Compose after changing the source code, rebuild the affected containers:
+
+```powershell
+docker compose up -d --build --force-recreate
+```
+
 ### User service
 
 | Method | Endpoint | Authentication |
@@ -160,7 +189,7 @@ Authorization: Bearer <jwt-token>
 | `POST` | `/auth/register` | Public |
 | `POST` | `/auth/login` | Public |
 | `GET` | `/users/me` | JWT required |
-| `PUT` | `/users/me` | JWT required |
+| `PATCH` | `/users/me` | JWT required |
 
 Register:
 
@@ -230,6 +259,23 @@ Create a payment for a held booking:
 
 Payment requests are published to RabbitMQ and processed asynchronously. The payment service validates the booking through the booking service's internal endpoint before creating a payment.
 
+### Wallet
+
+| Method | Endpoint | Authentication |
+|---|---|---|
+| `GET` | `/wallets/me` | JWT required |
+| `POST` | `/wallets/topup` | JWT required |
+
+Top up request:
+
+```json
+{
+  "amount": 5000000
+}
+```
+
+The amount must be greater than `0` and no more than `100000000`. Payment processing deducts the booking amount from the user's wallet. Payments fail when the wallet balance is insufficient.
+
 ### Admin service
 
 | Method | Endpoint | Authentication |
@@ -285,8 +331,9 @@ Flight or hotel deletion returns a conflict when the item still has active `held
 3. Search flights or hotels through `booking-service`.
 4. Create a booking using the selected item ID.
 5. Create a payment using the booking ID.
-6. Check the payment and booking status through their respective endpoints.
-7. Use an admin JWT to manage flight and hotel inventory or view booking analytics.
+6. Top up the wallet if necessary using `/wallets/topup`.
+7. Check the payment and booking status through their respective endpoints.
+8. Use an admin JWT to manage flight and hotel inventory or view booking analytics.
 
 ## Development
 
@@ -303,4 +350,5 @@ The repository does not currently have a root Go module, so commands must be run
 - Do not commit `.env` files or real credentials.
 - Use strong, unique values for `JWT_SECRET` and `INTERNAL_API_KEY`.
 - Keep the booking service's internal endpoint accessible only to trusted services.
+- Keep Redis and RabbitMQ accessible only to trusted services in production.
 - Use HTTPS and a secure secret-management solution in production.
