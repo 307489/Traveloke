@@ -1,11 +1,12 @@
 package main
 
 import (
+	"booking-service/cache"
 	"booking-service/database"
 	"booking-service/handlers"
+	"booking-service/messaging"
 	"booking-service/middleware"
 	"booking-service/models"
-	"booking-service/messaging"
 	"log"
 	"os"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func seed() {
@@ -52,14 +54,17 @@ func startExpiryJob() {
 func main() {
 	godotenv.Load()
 	database.Connect()
+	cache.Connect()
 	database.DB.AutoMigrate(&models.Flight{}, &models.Hotel{}, &models.Booking{})
 	seed()
 	startExpiryJob()
 	messaging.StartPaymentResultConsumer()
 
 	r := gin.Default()
+	r.Use(middleware.Metrics())
 
 	r.GET("/health", func(c *gin.Context) { c.JSON(200, gin.H{"status": "ok"}) })
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	r.GET("/flights", handlers.SearchFlights)
 	r.GET("/hotels", handlers.SearchHotels)
 
@@ -87,7 +92,6 @@ func main() {
 		protected.GET("/:id", handlers.GetBooking)
 		protected.POST("/:id/cancel", handlers.CancelBooking)
 	}
-	
 
 	port := os.Getenv("PORT")
 	if port == "" {

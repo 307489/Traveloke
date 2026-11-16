@@ -3,6 +3,7 @@ package handlers
 import (
 	"booking-service/database"
 	"booking-service/models"
+	"booking-service/cache"
 	"errors"
 	"net/http"
 	"time"
@@ -36,7 +37,6 @@ func CreateBooking(c *gin.Context) {
 
 		if input.Type == "flight" {
 			var f models.Flight
-			// lock row supaya 2 request bersamaan tidak bisa ambil kursi terakhir
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 				Where("id = ?", input.ItemID).First(&f).Error; err != nil {
 				return errors.New("flight not found")
@@ -82,6 +82,9 @@ func CreateBooking(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
+
+	cache.InvalidatePrefix("flights:")
+	cache.InvalidatePrefix("hotels:")
 
 	c.JSON(http.StatusCreated, gin.H{
 		"message": "Booking held. Complete payment before it expires.",
@@ -136,6 +139,8 @@ func CancelBooking(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	cache.InvalidatePrefix("flights:")
+	cache.InvalidatePrefix("hotels:")
 	c.JSON(http.StatusOK, gin.H{"message": "Booking cancelled"})
 }
 
@@ -157,7 +162,6 @@ func ExpireHeldBookings() {
 	for i := range expired {
 		b := expired[i]
 		database.DB.Transaction(func(tx *gorm.DB) error {
-			// re-check di dalam lock, siapa tahu baru saja dibayar
 			var cur models.Booking
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 				Where("id = ?", b.ID).First(&cur).Error; err != nil {
